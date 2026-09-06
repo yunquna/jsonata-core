@@ -62,6 +62,148 @@ pub mod string {
     use super::*;
     use regex::Regex;
 
+    #[cfg(feature = "regex-lookaround")]
+    const FANCY_REGEX_BACKTRACK_LIMIT: usize = 1_000_000;
+
+    #[derive(Clone, Copy)]
+    pub struct RegexMatch<'a> {
+        text: &'a str,
+        start: usize,
+        end: usize,
+    }
+
+    impl<'a> RegexMatch<'a> {
+        pub fn as_str(&self) -> &'a str {
+            self.text
+        }
+
+        pub fn start(&self) -> usize {
+            self.start
+        }
+
+        pub fn end(&self) -> usize {
+            self.end
+        }
+    }
+
+    pub struct RegexCaptures<'a>(Vec<Option<RegexMatch<'a>>>);
+
+    impl<'a> RegexCaptures<'a> {
+        pub fn get(&self, index: usize) -> Option<RegexMatch<'a>> {
+            self.0.get(index).copied().flatten()
+        }
+
+        pub fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+    }
+
+    pub enum JsonataRegex {
+        Linear(Regex),
+        #[cfg(feature = "regex-lookaround")]
+        Fancy(fancy_regex::Regex),
+    }
+
+    impl JsonataRegex {
+        #[cfg(feature = "regex-lookaround")]
+        fn execution_error(error: impl std::fmt::Display) -> FunctionError {
+            FunctionError::RuntimeError(format!("Regex execution failed: {error}"))
+        }
+
+        pub fn is_match(&self, text: &str) -> Result<bool, FunctionError> {
+            match self {
+                Self::Linear(regex) => Ok(regex.is_match(text)),
+                #[cfg(feature = "regex-lookaround")]
+                Self::Fancy(regex) => regex.is_match(text).map_err(Self::execution_error),
+            }
+        }
+
+        pub fn find<'a>(&self, text: &'a str) -> Result<Option<RegexMatch<'a>>, FunctionError> {
+            match self {
+                Self::Linear(regex) => Ok(regex.find(text).map(regex_match)),
+                #[cfg(feature = "regex-lookaround")]
+                Self::Fancy(regex) => regex
+                    .find(text)
+                    .map(|found| found.map(fancy_regex_match))
+                    .map_err(Self::execution_error),
+            }
+        }
+
+        pub fn captures_iter<'a>(
+            &'a self,
+            text: &'a str,
+        ) -> Box<dyn Iterator<Item = Result<RegexCaptures<'a>, FunctionError>> + 'a> {
+            match self {
+                Self::Linear(regex) => Box::new(
+                    regex
+                        .captures_iter(text)
+                        .map(|captures| Ok(regex_captures(captures))),
+                ),
+                #[cfg(feature = "regex-lookaround")]
+                Self::Fancy(regex) => Box::new(regex.captures_iter(text).map(|captures| {
+                    captures
+                        .map(fancy_regex_captures)
+                        .map_err(Self::execution_error)
+                })),
+            }
+        }
+
+        pub fn split<'a>(
+            &self,
+            text: &'a str,
+            limit: Option<usize>,
+        ) -> Result<Vec<&'a str>, FunctionError> {
+            let limit = limit.unwrap_or(usize::MAX);
+            match self {
+                Self::Linear(regex) => Ok(regex.split(text).take(limit).collect()),
+                #[cfg(feature = "regex-lookaround")]
+                Self::Fancy(regex) => regex
+                    .split(text)
+                    .take(limit)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(Self::execution_error),
+            }
+        }
+    }
+
+    fn regex_match(found: regex::Match<'_>) -> RegexMatch<'_> {
+        RegexMatch {
+            text: found.as_str(),
+            start: found.start(),
+            end: found.end(),
+        }
+    }
+
+    fn regex_captures(captures: regex::Captures<'_>) -> RegexCaptures<'_> {
+        RegexCaptures(
+            (0..captures.len())
+                .map(|i| captures.get(i).map(regex_match))
+                .collect(),
+        )
+    }
+
+    #[cfg(feature = "regex-lookaround")]
+    fn fancy_regex_match(found: fancy_regex::Match<'_>) -> RegexMatch<'_> {
+        RegexMatch {
+            text: found.as_str(),
+            start: found.start(),
+            end: found.end(),
+        }
+    }
+
+    #[cfg(feature = "regex-lookaround")]
+    fn fancy_regex_captures(captures: fancy_regex::Captures<'_>) -> RegexCaptures<'_> {
+        RegexCaptures(
+            (0..captures.len())
+                .map(|i| captures.get(i).map(fancy_regex_match))
+                .collect(),
+        )
+    }
+
     /// Helper to detect and extract regex from a JValue
     pub fn extract_regex(value: &JValue) -> Option<(String, String)> {
         match value {
@@ -71,7 +213,7 @@ pub mod string {
     }
 
     /// Helper to build a Regex from pattern and flags
-    pub fn build_regex(pattern: &str, flags: &str) -> Result<Regex, FunctionError> {
+    pub fn build_regex(pattern: &str, flags: &str) -> Result<JsonataRegex, FunctionError> {
         // Convert JSONata flags to Rust inline regex flags. Only emit the
         // group for flags Rust regex knows; a bare "(?)" (e.g. from the
         // internal-only `g` flag alone) is a syntax error.
@@ -94,8 +236,24 @@ pub mod string {
         }
         regex_pattern.push_str(pattern);
 
-        Regex::new(&regex_pattern)
-            .map_err(|e| FunctionError::ArgumentError(format!("Invalid regex: {}", e)))
+        match Regex::new(&regex_pattern) {
+            Ok(regex) => Ok(JsonataRegex::Linear(regex)),
+            Err(_linear_error) => {
+                #[cfg(feature = "regex-lookaround")]
+                {
+                    let mut builder = fancy_regex::RegexBuilder::new(&regex_pattern);
+                    builder.backtrack_limit(FANCY_REGEX_BACKTRACK_LIMIT);
+                    builder
+                        .build()
+                        .map(JsonataRegex::Fancy)
+                        .map_err(|e| FunctionError::ArgumentError(format!("Invalid regex: {e}")))
+                }
+                #[cfg(not(feature = "regex-lookaround"))]
+                Err(FunctionError::ArgumentError(format!(
+                    "Invalid regex: {_linear_error}"
+                )))
+            }
+        }
     }
 
     /// $string(value, prettify) - Convert value to string
@@ -407,7 +565,7 @@ pub mod string {
         // Check if pattern is a regex
         if let Some((pat, flags)) = extract_regex(pattern) {
             let re = build_regex(&pat, &flags)?;
-            return Ok(JValue::Bool(re.is_match(s)));
+            return Ok(JValue::Bool(re.is_match(s)?));
         }
 
         // Handle string pattern
@@ -434,16 +592,12 @@ pub mod string {
         if let Some((pattern, flags)) = extract_regex(separator) {
             let re = build_regex(&pattern, &flags)?;
 
-            let parts: Vec<JValue> = re.split(s).map(JValue::string).collect();
-
-            // Truncate to limit if specified (limit is max number of results)
-            let result = if let Some(lim) = limit {
-                parts.into_iter().take(lim).collect()
-            } else {
-                parts
-            };
-
-            return Ok(JValue::array(result));
+            let parts = re
+                .split(s, limit)?
+                .into_iter()
+                .map(JValue::string)
+                .collect();
+            return Ok(JValue::array(parts));
         }
 
         // Handle string separator. The signature `<s-(sf)n?:a<s>>` admits a
@@ -517,7 +671,7 @@ pub mod string {
     fn substitute_capture_groups(
         replacement: &str,
         full_match: &str,
-        groups: &[Option<regex::Match>],
+        groups: &[Option<RegexMatch<'_>>],
     ) -> String {
         let mut result = String::new();
         let mut position = 0;
@@ -627,16 +781,14 @@ pub mod string {
         if let Some((pat, flags)) = extract_regex(pattern) {
             let re = build_regex(&pat, &flags)?;
 
-            let mut count = 0;
             let mut last_match = 0;
             let mut output = String::new();
 
-            for cap in re.captures_iter(s) {
-                if limit.is_some_and(|lim| count >= lim) {
-                    break;
-                }
-
-                let m = cap.get(0).unwrap();
+            for cap in re.captures_iter(s).take(limit.unwrap_or(usize::MAX)) {
+                let cap = cap?;
+                let m = cap.get(0).ok_or_else(|| {
+                    FunctionError::RuntimeError("Regex match missing capture 0".to_string())
+                })?;
 
                 // D1004: Regular expression matches zero length string
                 if m.as_str().is_empty() {
@@ -648,7 +800,7 @@ pub mod string {
                 output.push_str(&s[last_match..m.start()]);
 
                 // Collect capture groups
-                let groups: Vec<Option<regex::Match>> =
+                let groups: Vec<Option<RegexMatch<'_>>> =
                     (1..cap.len()).map(|i| cap.get(i)).collect();
 
                 // Perform capture group substitution
@@ -656,7 +808,6 @@ pub mod string {
                 output.push_str(&substituted);
 
                 last_match = m.end();
-                count += 1;
             }
 
             output.push_str(&s[last_match..]);

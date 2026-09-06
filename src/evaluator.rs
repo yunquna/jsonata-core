@@ -6,9 +6,9 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::manual_strip)]
 
+use crate::runtime::Instant;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 use crate::ast::{AstNode, BinaryOp, PathStep, Stage};
 use crate::parser;
@@ -2929,7 +2929,7 @@ impl Evaluator {
             recursion_depth: 0,
             // Limit recursion depth to prevent stack overflow
             // True TCO would allow deeper recursion but requires parser-level thunk marking
-            max_recursion_depth: 302,
+            max_recursion_depth: crate::runtime::MAX_EVAL_DEPTH,
             tuple_stream_created: false,
             keep_tuple_stream: false,
             options: EvaluatorOptions::default(),
@@ -2942,7 +2942,7 @@ impl Evaluator {
         Evaluator {
             context,
             recursion_depth: 0,
-            max_recursion_depth: 302,
+            max_recursion_depth: crate::runtime::MAX_EVAL_DEPTH,
             tuple_stream_created: false,
             keep_tuple_stream: false,
             options: EvaluatorOptions::default(),
@@ -2957,7 +2957,7 @@ impl Evaluator {
         Evaluator {
             context,
             recursion_depth: 0,
-            max_recursion_depth: 302,
+            max_recursion_depth: crate::runtime::MAX_EVAL_DEPTH,
             tuple_stream_created: false,
             keep_tuple_stream: false,
             options,
@@ -3532,7 +3532,7 @@ impl Evaluator {
         // low, so this stays a no-op cost on the common shallow path.
         const RED_ZONE: usize = 128 * 1024;
         const GROW_STACK_SIZE: usize = 8 * 1024 * 1024;
-        let result = stacker::maybe_grow(RED_ZONE, GROW_STACK_SIZE, || {
+        let result = crate::runtime::maybe_grow(RED_ZONE, GROW_STACK_SIZE, || {
             self.evaluate_internal_impl(node, data)
         });
 
@@ -6322,7 +6322,7 @@ impl Evaluator {
                             .map_err(|e| EvaluatorError::EvaluationError(e.to_string()))
                         {
                             Ok(re) => {
-                                if let Some(m) = re.find(&s) {
+                                if let Some(m) = re.find(&s)? {
                                     // Return match object
                                     let mut result = IndexMap::new();
                                     result.insert(
@@ -6339,6 +6339,7 @@ impl Evaluator {
                                     // Capture groups
                                     let mut groups = Vec::new();
                                     for cap in re.captures_iter(&s).take(1) {
+                                        let cap = cap?;
                                         for i in 1..cap.len() {
                                             if let Some(c) = cap.get(i) {
                                                 groups.push(JValue::string(c.as_str().to_string()));
@@ -7418,16 +7419,12 @@ impl Evaluator {
                     .map_err(|e| EvaluatorError::EvaluationError(e.to_string()))?;
 
                 let mut results = Vec::new();
-                let mut count = 0;
 
-                for caps in re.captures_iter(&s) {
-                    if let Some(lim) = limit {
-                        if count >= lim {
-                            break;
-                        }
-                    }
-
-                    let full_match = caps.get(0).unwrap();
+                for caps in re.captures_iter(&s).take(limit.unwrap_or(usize::MAX)) {
+                    let caps = caps?;
+                    let full_match = caps.get(0).ok_or_else(|| {
+                        EvaluatorError::EvaluationError("Regex match missing capture 0".to_string())
+                    })?;
                     let mut match_obj = IndexMap::new();
                     match_obj.insert(
                         "match".to_string(),
@@ -7452,7 +7449,6 @@ impl Evaluator {
                     }
 
                     results.push(JValue::object(match_obj));
-                    count += 1;
 
                     // If not global, only return first match
                     if !is_global {
@@ -7461,7 +7457,7 @@ impl Evaluator {
                 }
 
                 if results.is_empty() {
-                    Ok(JValue::Null)
+                    Ok(JValue::Undefined)
                 } else if results.len() == 1 && !is_global {
                     // Single match (non-global) returns the match object directly
                     Ok(results.into_iter().next().unwrap())
@@ -8954,17 +8950,12 @@ impl Evaluator {
         // Iterate through matches and replace using lambda
         let mut result = String::new();
         let mut last_end = 0;
-        let mut count = 0;
 
-        for cap in re.captures_iter(s) {
-            // Check limit
-            if let Some(lim) = limit {
-                if count >= lim {
-                    break;
-                }
-            }
-
-            let m = cap.get(0).unwrap();
+        for cap in re.captures_iter(s).take(limit.unwrap_or(usize::MAX)) {
+            let cap = cap?;
+            let m = cap.get(0).ok_or_else(|| {
+                EvaluatorError::EvaluationError("Regex match missing capture 0".to_string())
+            })?;
             let match_start = m.start();
             let match_end = m.end();
             let match_str = m.as_str();
@@ -9007,7 +8998,6 @@ impl Evaluator {
             result.push_str(&replacement_str);
 
             last_end = match_end;
-            count += 1;
         }
 
         // Add remaining text after last match

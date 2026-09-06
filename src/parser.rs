@@ -828,7 +828,7 @@ const PARSER_GROW_STACK_SIZE: usize = 8 * 1024 * 1024;
 // loop-driven case -- so 1000 has essentially zero headroom by construction
 // (that's the point: it's an exact ceiling match with ast_transform, not an
 // independently-tuned one) but is not itself unsafe at that ceiling.
-const MAX_PARSE_DEPTH: usize = 1000;
+const MAX_PARSE_DEPTH: usize = crate::runtime::MAX_PARSE_DEPTH;
 
 /// Parser for JSONata expressions using Pratt parsing
 pub struct Parser {
@@ -1287,7 +1287,7 @@ impl Parser {
         let entry_depth = self.depth;
         self.bump_parse_depth()?;
 
-        let result = stacker::maybe_grow(PARSER_RED_ZONE, PARSER_GROW_STACK_SIZE, || {
+        let result = crate::runtime::maybe_grow(PARSER_RED_ZONE, PARSER_GROW_STACK_SIZE, || {
             self.parse_expression_impl(min_bp)
         });
 
