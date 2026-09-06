@@ -105,7 +105,7 @@ fn coded(code: &'static str, message: impl Into<String>) -> AstTransformError {
 // fixes, and not exercised by either test above (one only exercises the
 // bail path at n=200,000; the other only exercises a SHALLOW successful
 // tree, not a near-ceiling one).
-const MAX_TRANSFORM_DEPTH: usize = 1000;
+const MAX_TRANSFORM_DEPTH: usize = crate::runtime::MAX_PARSE_DEPTH;
 // Same ceiling as MAX_TRANSFORM_DEPTH, for a DIFFERENT reason than "2x
 // headroom" might suggest: cycle 1 costs >=1 depth unit per level of ACTUAL
 // AST nesting (2 units for a Binary/Unary/etc. level via the
@@ -122,7 +122,7 @@ const MAX_TRANSFORM_DEPTH: usize = 1000;
 // downstream-drop threshold noted above) -- just not defended by a margin,
 // so don't raise this independently of MAX_TRANSFORM_DEPTH without
 // re-checking this reasoning.
-const MAX_LABEL_SUBSTITUTION_DEPTH: usize = 1000;
+const MAX_LABEL_SUBSTITUTION_DEPTH: usize = crate::runtime::MAX_PARSE_DEPTH;
 
 // Same constants `evaluate_internal` (src/evaluator.rs) uses for its
 // analogous native-stack safety net -- see that function's doc comment for
@@ -478,7 +478,7 @@ fn substitute_labels(
     depth: usize,
 ) -> Result<AstNode, AstTransformError> {
     check_label_substitution_depth(depth)?;
-    stacker::maybe_grow(
+    crate::runtime::maybe_grow(
         AST_TRANSFORM_RED_ZONE,
         AST_TRANSFORM_GROW_STACK_SIZE,
         || substitute_labels_impl(node, state, depth),
@@ -816,7 +816,7 @@ fn transform_node(
         drop_ast_node_iteratively(node);
         return Err(max_transform_depth_error());
     }
-    stacker::maybe_grow(
+    crate::runtime::maybe_grow(
         AST_TRANSFORM_RED_ZONE,
         AST_TRANSFORM_GROW_STACK_SIZE,
         || transform_node_impl(node, state, depth),
@@ -936,7 +936,7 @@ fn transform_children(
         drop_ast_node_iteratively(node);
         return Err(max_transform_depth_error());
     }
-    stacker::maybe_grow(
+    crate::runtime::maybe_grow(
         AST_TRANSFORM_RED_ZONE,
         AST_TRANSFORM_GROW_STACK_SIZE,
         || transform_children_impl(node, state, depth),
@@ -1249,7 +1249,7 @@ fn transform_path_steps(
         drop_path_steps_iteratively(steps);
         return Err(max_transform_depth_error());
     }
-    stacker::maybe_grow(
+    crate::runtime::maybe_grow(
         AST_TRANSFORM_RED_ZONE,
         AST_TRANSFORM_GROW_STACK_SIZE,
         || transform_path_steps_impl(steps, state, depth),
@@ -1420,7 +1420,7 @@ fn walk_backward(
     depth: usize,
 ) -> Result<usize, AstTransformError> {
     check_transform_depth(depth)?;
-    stacker::maybe_grow(
+    crate::runtime::maybe_grow(
         AST_TRANSFORM_RED_ZONE,
         AST_TRANSFORM_GROW_STACK_SIZE,
         || walk_backward_impl(steps, label, level, state, depth),
@@ -1510,7 +1510,7 @@ fn seek_parent_step(
     depth: usize,
 ) -> Result<usize, AstTransformError> {
     check_transform_depth(depth)?;
-    stacker::maybe_grow(
+    crate::runtime::maybe_grow(
         AST_TRANSFORM_RED_ZONE,
         AST_TRANSFORM_GROW_STACK_SIZE,
         || seek_parent_step_impl(step, label, level, state, depth),
@@ -1600,7 +1600,7 @@ fn seek_parent_wrapped(
     depth: usize,
 ) -> Result<usize, AstTransformError> {
     check_transform_depth(depth)?;
-    stacker::maybe_grow(
+    crate::runtime::maybe_grow(
         AST_TRANSFORM_RED_ZONE,
         AST_TRANSFORM_GROW_STACK_SIZE,
         || seek_parent_wrapped_impl(node, label, level, state, depth),

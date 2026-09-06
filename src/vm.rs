@@ -200,7 +200,7 @@ impl<'prog> Vm<'prog> {
         vars: Option<&HashMap<&str, &JValue>>,
     ) -> Result<JValue, EvaluatorError> {
         let start_time = if self.options.timeout_ms.is_some() {
-            Some(std::time::Instant::now())
+            Some(crate::runtime::Instant::now())
         } else {
             None
         };
@@ -225,7 +225,7 @@ fn run_inner(
     vars: Option<&HashMap<&str, &JValue>>,
     stack: &mut Vec<JValue>,
     options: &EvaluatorOptions,
-    start_time: Option<std::time::Instant>,
+    start_time: Option<crate::runtime::Instant>,
 ) -> Result<JValue, EvaluatorError> {
     use crate::builtins::dispatch_pure;
     use crate::evaluator::{
