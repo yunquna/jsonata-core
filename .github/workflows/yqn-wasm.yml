@@ -1,0 +1,40 @@
+name: YQN Rust WASM
+on:
+  push:
+    branches: ['fix/cloudflare-wasm', main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: yqn-wasm-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  qualify:
+    if: github.repository == 'yunquna/jsonata-core'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+          sparse-checkout: |
+            src
+            tests
+            benches
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Native library and regex regressions
+        run: |
+          cargo test --locked --lib --no-default-features
+          cargo test --locked --lib --no-default-features --features regex-lookaround
+          cargo test --locked --test regex_backend_test --no-default-features
+          cargo test --locked --test regex_backend_test --no-default-features --features regex-lookaround
+      - name: WASM target build
+        run: cargo build --locked --lib --no-default-features --features regex-lookaround --target wasm32-unknown-unknown
